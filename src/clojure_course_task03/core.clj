@@ -77,7 +77,7 @@
         ;; Accepts vector [[:where (where* ...)] [:join (join* ...)] ...],
         ;; returns map {:where (where* ...), :join (join* ...), ...}
         env# (apply hash-map (apply concat env*))]
-    
+
     `(select* ~(str table-name)  ~env#)))
 
 
@@ -157,7 +157,7 @@
   (select-director-proposal) ;; select * proposal;
   (select-director-clients)  ;; select * from clients;
   (select-director-agents)  ;; select * from agents;
-  
+
 
   ;; Определяем пользователей и их группы
 
@@ -198,7 +198,7 @@
             (fields :done)
             (where {:agent "Ivanov"})
             (order :done :ASC)))
-  
+
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -237,3 +237,89 @@
   ;;    Таким образом, функция select, вызванная внутри with-user, получает
   ;;    доступ ко всем необходимым переменным вида <table-name>-fields-var.
   )
+
+(defn table-columns [params]
+  (->> (partition 3 params)
+       (reduce (fn [m [k _ v]] (assoc m k v)) {})))
+
+(defn unsymbol [coll]
+  (vec (map #(keyword %) coll)))
+
+(defmacro group [name & body]
+  ;; Пример
+  ;; (group Agent
+  ;;      proposal -> [person, phone, address, price]
+  ;;      agents -> [clients_id, proposal_id, agent])
+  ;; 1) Создает группу Agent
+  ;; 2) Запоминает, какие таблицы (и какие колонки в таблицах)
+  ;;    разрешены в данной группе.
+  ;; 3) Создает следующие функции
+  ;;    (select-agent-proposal) ;; select person, phone, address, price from proposal;
+  ;;    (select-agent-agents)  ;; select clients_id, proposal_id, agent from agents;
+  (let [columns (table-columns body)
+        tables (keys columns)]
+    `(do
+       (def ~name ~(unsymbol tables))
+       ~@(map
+          (fn [table]
+            (let [vname (format "%s-%s-fields" name table)]
+              `(def ~(symbol vname) ~(unsymbol (get columns table)))
+              ))
+          tables)
+       ~@(map
+          (fn [table]
+            (let [fname (format "select-%s-%s" (clojure.string/lower-case name) table)
+                  fields (clojure.string/join "," (get columns table))]
+              `(defn ~(symbol fname) []
+                 ~(str "SELECT " fields " FROM " table " "))
+              ))
+          tables))))
+
+(defn get-fields-vars [user groups]
+  (apply
+    hash-map
+    (mapcat
+      (fn [group]
+        (mapcat
+          (fn [table]
+            [(format "%s-%s-fields-var" user (name table))
+             (format "%s-%s-fields" group (name table))])
+          @(resolve group)))
+    groups)))
+
+(defmacro user [name & body]
+  ;; Пример
+  ;; (user Ivanov
+  ;;     (belongs-to Agent))
+  ;; Создает переменные Ivanov-proposal-fields-var = [:person, :phone, :address, :price]
+  ;; и Ivanov-agents-fields-var = [:clients_id, :proposal_id, :agent]
+  (let [[[_ & groups]] body
+        defs (get-fields-vars name groups)
+        fields-vars (keys defs)
+        ]
+    `(do
+       (def ~(symbol name) ~(unsymbol fields-vars))
+       ~@(map
+          (fn [fields-var]
+            `(def ~(symbol fields-var) ~(symbol (get defs fields-var))))
+             fields-vars))))
+
+(defmacro with-user [name & body]
+  ;; Пример
+  ;; (with-user Ivanov
+  ;;   . . .)
+  ;; 1) Находит все переменные, начинающиеся со слова Ivanov, в *user-tables-vars*
+  ;;    (Ivanov-proposal-fields-var и Ivanov-agents-fields-var)
+  ;; 2) Создает локальные привязки без префикса Ivanov-:
+  ;;    proposal-fields-var и agents-fields-var.
+  ;;    Таким образом, функция select, вызванная внутри with-user, получает
+  ;;    доступ ко всем необходимым переменным вида <table-name>-fields-var.
+  (let [fields-vars @(resolve name)
+        name (str name)
+        n (+ (count name) 1)]
+    `(let ~(vec (mapcat
+                 (fn[field-var]
+                   (let [field-var (clojure.core/name field-var)]
+                     [(symbol (subs (str field-var) n)) (symbol field-var)]))
+                 fields-vars))
+       ~@body)))
