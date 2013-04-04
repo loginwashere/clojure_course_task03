@@ -245,6 +245,12 @@
 (defn unsymbol [coll]
   (vec (map #(keyword %) coll)))
 
+(defn format-table-fields-name [name table]
+  (format "%s-%s-fields" name table))
+
+(defn format-table-fields-var-name [name table]
+  (format "%s-%s-fields-var" name table))
+
 (defmacro group [name & body]
   ;; Пример
   ;; (group Agent
@@ -262,17 +268,15 @@
        (def ~name ~(unsymbol tables))
        ~@(map
           (fn [table]
-            (let [vname (format "%s-%s-fields" name table)]
-              `(def ~(symbol vname) ~(unsymbol (get columns table)))
-              ))
+            (let [vname (format-table-fields-name name table)]
+              `(def ~(symbol vname) ~(unsymbol (get columns table)))))
           tables)
        ~@(map
           (fn [table]
             (let [fname (format "select-%s-%s" (clojure.string/lower-case name) table)
                   fields (clojure.string/join "," (get columns table))]
               `(defn ~(symbol fname) []
-                 ~(str "SELECT " fields " FROM " table " "))
-              ))
+                 ~(str "SELECT " fields " FROM " table " "))))
           tables))))
 
 (defn get-fields-vars [user groups]
@@ -282,8 +286,8 @@
       (fn [group]
         (mapcat
           (fn [table]
-            [(format "%s-%s-fields-var" user (name table))
-             (format "%s-%s-fields" group (name table))])
+            [(format-table-fields-var-name user (name table))
+             (format-table-fields-name group (name table))])
           @(resolve group)))
     groups)))
 
@@ -295,14 +299,13 @@
   ;; и Ivanov-agents-fields-var = [:clients_id, :proposal_id, :agent]
   (let [[[_ & groups]] body
         defs (get-fields-vars name groups)
-        fields-vars (keys defs)
-        ]
+        fields-vars (keys defs)]
     `(do
        (def ~(symbol name) ~(unsymbol fields-vars))
        ~@(map
-          (fn [fields-var]
-            `(def ~(symbol fields-var) ~(symbol (get defs fields-var))))
-             fields-vars))))
+        (fn [fields-var]
+          `(def ~(symbol fields-var) ~(symbol (get defs fields-var))))
+        fields-vars))))
 
 (defmacro with-user [name & body]
   ;; Пример
@@ -317,9 +320,11 @@
   (let [fields-vars @(resolve name)
         name (str name)
         n (+ (count name) 1)]
-    `(let ~(vec (mapcat
-                 (fn[field-var]
-                   (let [field-var (clojure.core/name field-var)]
-                     [(symbol (subs (str field-var) n)) (symbol field-var)]))
-                 fields-vars))
-       ~@body)))
+    `(let
+      ~(vec
+        (mapcat
+          (fn[field-var]
+            (let [field-var (clojure.core/name field-var)]
+              [(symbol (subs (str field-var) n)) (symbol field-var)]))
+          fields-vars))
+      ~@body)))
